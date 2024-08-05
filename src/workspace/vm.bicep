@@ -1,48 +1,47 @@
-param location string
-param networkInterfaceName1 string
+// Bicep: https://learn.microsoft.com/en-us/azure/virtual-machines/windows/quick-create-bicep?tabs=CLI
+param prefix string
+param networkInterfaceName string
 param enableAcceleratedNetworking bool
 param networkSecurityGroupName string
 param networkSecurityGroupRules array
 param subnetName string
-param virtualNetworkName string
-param addressPrefixes array
-param subnets array
-param publicIpAddressName1 string
+param virtualNetworkId string
+param publicIpAddressName string
 param publicIpAddressType string
 param publicIpAddressSku string
 param pipDeleteOption string
-param virtualMachineName1 string
-param virtualMachineComputerName1 string
+param virtualMachineComputerName string
 param osDiskType string
 param osDiskDeleteOption string
 param virtualMachineSize string
 param nicDeleteOption string
 param adminUsername string
+param tags object = {}
 
 @secure()
 param adminPassword string
-param virtualMachine1Zone string
-param tags object
-param dnsLabelPrefix string
+param patchMode string
+param enableHotpatching bool
 
 var nsgId = resourceId(resourceGroup().name, 'Microsoft.Network/networkSecurityGroups', networkSecurityGroupName)
-param OSVersion string = '2022-datacenter-azure-edition'
+var vnetId = virtualNetworkId
+var subnetRef = '${vnetId}/subnets/${subnetName}'
+var aadLoginExtensionName = 'AADLoginForWindows'
 
-resource networkInterface1 'Microsoft.Network/networkInterfaces@2022-11-01' = {
-  name: networkInterfaceName1
-  location: location
-  tags: tags
+resource networkInterface 'Microsoft.Network/networkInterfaces@2022-11-01' = {
+  name: networkInterfaceName
+  location: resourceGroup().location
   properties: {
     ipConfigurations: [
       {
         name: 'ipconfig1'
         properties: {
           subnet: {
-            id: resourceId('Microsoft.Network/virtualNetworks/subnets', virtualNetworkName, subnetName)          
+            id: subnetRef
           }
           privateIPAllocationMethod: 'Dynamic'
           publicIPAddress: {
-            id: resourceId(resourceGroup().name, 'Microsoft.Network/publicIpAddresses', publicIpAddressName1)
+            id: resourceId(resourceGroup().name, 'Microsoft.Network/publicIpAddresses', publicIpAddressName)
             properties: {
               deleteOption: pipDeleteOption
             }
@@ -55,56 +54,37 @@ resource networkInterface1 'Microsoft.Network/networkInterfaces@2022-11-01' = {
       id: nsgId
     }
   }
+  tags: tags
   dependsOn: [
     networkSecurityGroup
-    virtualNetwork
-    publicIpAddress1
+    publicIpAddress
   ]
 }
 
 resource networkSecurityGroup 'Microsoft.Network/networkSecurityGroups@2020-05-01' = {
   name: networkSecurityGroupName
-  location: location
-  tags: tags
+  location: resourceGroup().location
   properties: {
     securityRules: networkSecurityGroupRules
   }
+  tags: tags
 }
 
-resource virtualNetwork 'Microsoft.Network/virtualNetworks@2023-05-01' = {
-  name: virtualNetworkName
-  location: location
-  tags: tags
-  properties: {
-    addressSpace: {
-      addressPrefixes: addressPrefixes
-    }
-    subnets: subnets
-  }
-}
-
-resource publicIpAddress1 'Microsoft.Network/publicIpAddresses@2020-08-01' = {
-  name: publicIpAddressName1
-  location: location
-  tags: tags
+resource publicIpAddress 'Microsoft.Network/publicIpAddresses@2020-08-01' = {
+  name: publicIpAddressName
+  location: resourceGroup().location
   properties: {
     publicIPAllocationMethod: publicIpAddressType
-    dnsSettings:{
-      domainNameLabel: dnsLabelPrefix
-    }
   }
   sku: {
     name: publicIpAddressSku
   }
-  zones: [
-    virtualMachine1Zone
-  ]
+  tags: tags
 }
 
-resource virtualMachine1 'Microsoft.Compute/virtualMachines@2024-03-01' = {
-  name: virtualMachineName1
-  location: location
-  tags: tags
+resource virtualMachine 'Microsoft.Compute/virtualMachines@2024-03-01' = {
+  name: '${prefix}-vm'
+  location: resourceGroup().location
   properties: {
     hardwareProfile: {
       vmSize: virtualMachineSize
@@ -120,27 +100,36 @@ resource virtualMachine1 'Microsoft.Compute/virtualMachines@2024-03-01' = {
       imageReference: {
         publisher: 'MicrosoftWindowsServer'
         offer: 'WindowsServer'
-        sku: OSVersion
+        sku: '2022-datacenter-azure-edition'
         version: 'latest'
       }
     }
     networkProfile: {
       networkInterfaces: [
         {
-          id: networkInterface1.id
+          id: networkInterface.id
           properties: {
             deleteOption: nicDeleteOption
           }
         }
       ]
     }
+    securityProfile: {}
     additionalCapabilities: {
       hibernationEnabled: false
     }
     osProfile: {
-      computerName: virtualMachineComputerName1
+      computerName: virtualMachineComputerName
       adminUsername: adminUsername
       adminPassword: adminPassword
+      windowsConfiguration: {
+        enableAutomaticUpdates: true
+        provisionVMAgent: true
+        patchSettings: {
+          enableHotpatching: enableHotpatching
+          patchMode: patchMode
+        }
+      }
     }
     diagnosticsProfile: {
       bootDiagnostics: {
@@ -148,12 +137,26 @@ resource virtualMachine1 'Microsoft.Compute/virtualMachines@2024-03-01' = {
       }
     }
   }
-  zones: [
-    virtualMachine1Zone
-  ]
+  identity: {
+    type: 'SystemAssigned'
+  }
+  tags: tags
 }
 
-output vmName string = virtualMachine1.name
-output adminUsername string = virtualMachine1.properties.osProfile.adminUsername
-output fqdn string = virtualMachine1.properties.osProfile.computerName
-output resourceGroupName string = resourceGroup().name
+resource virtualMachineName_aadLoginExtension 'Microsoft.Compute/virtualMachines/extensions@2018-10-01' = {
+  parent: virtualMachine
+  name: aadLoginExtensionName
+  location: resourceGroup().location
+  properties: {
+    publisher: 'Microsoft.Azure.ActiveDirectory'
+    type: aadLoginExtensionName
+    typeHandlerVersion: '1.0'
+    autoUpgradeMinorVersion: true
+    settings: {
+      mdmId: ''
+    }
+  }
+  tags: tags
+}
+
+output adminUsername string = adminUsername
